@@ -1,18 +1,91 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
+use std::collections::HashMap;
 use std::io::{Read, Write};
-use std::sync::Mutex;
-use tauri::Emitter;
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Arc, Mutex};
+use tauri::{AppHandle, Emitter, Manager};
 
-struct PtyState {
+// ── PTY management ──────────────────────────────────────────────────────
+
+struct PtyInstance {
     writer: Mutex<Box<dyn Write + Send>>,
     master: Mutex<Box<dyn MasterPty + Send>>,
 }
 
+struct PtyManager {
+    instances: Mutex<HashMap<u32, Arc<PtyInstance>>>,
+    next_id: AtomicU32,
+}
+
 #[tauri::command]
-fn write_to_pty(data: String, state: tauri::State<'_, PtyState>) -> Result<(), String> {
-    let mut writer = state.writer.lock().map_err(|e| e.to_string())?;
+fn spawn_pty(cols: u16, rows: u16, app: AppHandle, state: tauri::State<'_, PtyManager>) -> Result<u32, String> {
+    let pty_system = native_pty_system();
+    let pair = pty_system
+        .openpty(PtySize {
+            rows,
+            cols,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .map_err(|e| e.to_string())?;
+
+    let cmd = if cfg!(target_os = "windows") {
+        CommandBuilder::new("cmd.exe")
+    } else {
+        let shell = std::env::var("SHELL").unwrap_or_else(|_| "bash".to_string());
+        CommandBuilder::new(shell)
+    };
+
+    let _child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
+    drop(pair.slave);
+
+    let reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
+    let writer = pair.master.take_writer().map_err(|e| e.to_string())?;
+
+    let id = state.next_id.fetch_add(1, Ordering::SeqCst);
+
+    let instance = Arc::new(PtyInstance {
+        writer: Mutex::new(writer),
+        master: Mutex::new(pair.master),
+    });
+
+    state
+        .instances
+        .lock()
+        .map_err(|e| e.to_string())?
+        .insert(id, instance);
+
+    // Reader thread streams output to frontend
+    let output_event = format!("pty-output-{}", id);
+    let exit_event = format!("pty-exit-{}", id);
+    std::thread::spawn(move || {
+        let mut reader = reader;
+        let mut buf = [0u8; 4096];
+        loop {
+            match reader.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                    let text = String::from_utf8_lossy(&buf[..n]).to_string();
+                    let _ = app.emit(&output_event, &text);
+                }
+                Err(_) => break,
+            }
+        }
+        let _ = app.emit(&exit_event, ());
+    });
+
+    Ok(id)
+}
+
+#[tauri::command]
+fn write_to_pty(id: u32, data: String, state: tauri::State<'_, PtyManager>) -> Result<(), String> {
+    let instances = state.instances.lock().map_err(|e| e.to_string())?;
+    let instance = instances.get(&id).ok_or("PTY not found")?.clone();
+    drop(instances);
+
+    let mut writer = instance.writer.lock().map_err(|e| e.to_string())?;
     writer
         .write_all(data.as_bytes())
         .map_err(|e| e.to_string())?;
@@ -20,8 +93,12 @@ fn write_to_pty(data: String, state: tauri::State<'_, PtyState>) -> Result<(), S
 }
 
 #[tauri::command]
-fn resize_pty(cols: u16, rows: u16, state: tauri::State<'_, PtyState>) -> Result<(), String> {
-    let master = state.master.lock().map_err(|e| e.to_string())?;
+fn resize_pty(id: u32, cols: u16, rows: u16, state: tauri::State<'_, PtyManager>) -> Result<(), String> {
+    let instances = state.instances.lock().map_err(|e| e.to_string())?;
+    let instance = instances.get(&id).ok_or("PTY not found")?.clone();
+    drop(instances);
+
+    let master = instance.master.lock().map_err(|e| e.to_string())?;
     master
         .resize(PtySize {
             rows,
@@ -33,53 +110,77 @@ fn resize_pty(cols: u16, rows: u16, state: tauri::State<'_, PtyState>) -> Result
     Ok(())
 }
 
-fn main() {
-    // ── Open PTY ────────────────────────────────────────────────────────
-    let pty_system = native_pty_system();
-    let pair = pty_system
-        .openpty(PtySize {
-            rows: 24,
-            cols: 80,
-            pixel_width: 0,
-            pixel_height: 0,
-        })
-        .expect("Failed to open PTY");
+#[tauri::command]
+fn close_pty(id: u32, state: tauri::State<'_, PtyManager>) -> Result<(), String> {
+    state
+        .instances
+        .lock()
+        .map_err(|e| e.to_string())?
+        .remove(&id);
+    Ok(())
+}
 
-    // ── Spawn shell ─────────────────────────────────────────────────────
-    let cmd = if cfg!(target_os = "windows") {
-        CommandBuilder::new("cmd.exe")
+// ── Config management ───────────────────────────────────────────────────
+
+fn get_config_path(app: &AppHandle) -> Result<std::path::PathBuf, String> {
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?;
+    Ok(dir.join("config.json"))
+}
+
+#[tauri::command]
+fn load_config(app: AppHandle) -> Result<String, String> {
+    let path = get_config_path(&app)?;
+    if path.exists() {
+        std::fs::read_to_string(&path).map_err(|e| e.to_string())
     } else {
-        let shell = std::env::var("SHELL").unwrap_or_else(|_| "bash".to_string());
-        CommandBuilder::new(shell)
+        Ok(String::new())
+    }
+}
+
+#[tauri::command]
+fn save_config(config: String, app: AppHandle) -> Result<(), String> {
+    let path = get_config_path(&app)?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    std::fs::write(&path, &config).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn get_config_path_display(app: AppHandle) -> Result<String, String> {
+    let path = get_config_path(&app)?;
+    Ok(path.to_string_lossy().to_string())
+}
+
+// ── Main ────────────────────────────────────────────────────────────────
+
+fn main() {
+    let pty_manager = PtyManager {
+        instances: Mutex::new(HashMap::new()),
+        next_id: AtomicU32::new(0),
     };
 
-    let _child = pair.slave.spawn_command(cmd).expect("Failed to spawn shell");
-    drop(pair.slave);
-
-    // ── Split PTY into reader / writer / master ─────────────────────────
-    let reader = pair
-        .master
-        .try_clone_reader()
-        .expect("Failed to get PTY reader");
-    let writer = pair
-        .master
-        .take_writer()
-        .expect("Failed to get PTY writer");
-
-    let pty_state = PtyState {
-        writer: Mutex::new(writer),
-        master: Mutex::new(pair.master),
-    };
-
-    // ── Build Tauri app ─────────────────────────────────────────────────
     tauri::Builder::default()
-        .manage(pty_state)
-        .invoke_handler(tauri::generate_handler![write_to_pty, resize_pty])
-        .setup(move |app| {
-            // ── Menu bar ────────────────────────────────────────────────
+        .manage(pty_manager)
+        .invoke_handler(tauri::generate_handler![
+            spawn_pty,
+            write_to_pty,
+            resize_pty,
+            close_pty,
+            load_config,
+            save_config,
+            get_config_path_display,
+        ])
+        .setup(|app| {
             use tauri::menu::{MenuBuilder, SubmenuBuilder};
 
             let file_menu = SubmenuBuilder::new(app, "File")
+                .text("new-tab", "New Tab")
+                .separator()
                 .text("quit", "Exit")
                 .build()?;
 
@@ -94,11 +195,15 @@ fn main() {
                 .text("zoom-in", "Zoom In")
                 .text("zoom-out", "Zoom Out")
                 .text("zoom-reset", "Reset Zoom")
+                .separator()
+                .text("split-toggle", "Toggle Split View")
                 .build()?;
 
             let terminal_menu = SubmenuBuilder::new(app, "Terminal")
                 .text("clear", "Clear")
                 .text("reset", "Reset")
+                .separator()
+                .text("settings", "Settings...")
                 .build()?;
 
             let help_menu = SubmenuBuilder::new(app, "Help")
@@ -117,34 +222,14 @@ fn main() {
 
             app.set_menu(menu)?;
 
-            // ── PTY reader thread ───────────────────────────────────────
-            let app_handle = app.handle().clone();
-            std::thread::spawn(move || {
-                let mut reader = reader;
-                let mut buf = [0u8; 4096];
-                loop {
-                    match reader.read(&mut buf) {
-                        Ok(0) => break,
-                        Ok(n) => {
-                            let text = String::from_utf8_lossy(&buf[..n]).to_string();
-                            let _ = app_handle.emit("pty-output", &text);
-                        }
-                        Err(_) => break,
-                    }
-                }
-                let _ = app_handle.emit("pty-exit", ());
-            });
-
             Ok(())
         })
-        .on_menu_event(|app, event| {
-            match event.id().as_ref() {
-                "quit" => {
-                    app.exit(0);
-                }
-                id => {
-                    let _ = app.emit("menu-event", id);
-                }
+        .on_menu_event(|app, event| match event.id().as_ref() {
+            "quit" => {
+                app.exit(0);
+            }
+            id => {
+                let _ = app.emit("menu-event", id);
             }
         })
         .run(tauri::generate_context!())
