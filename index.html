@@ -1,29 +1,40 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>XTerm Rust</title>
-  <link rel="stylesheet" href="/src/styles.css">
-  <link id="google-font-link" rel="stylesheet" href="">
-</head>
-<body>
-  <div id="app">
-    <div id="tab-bar">
-      <div id="tab-list"></div>
-      <button id="tab-add" title="New Tab">+</button>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>XTerm Rust</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+    <link id="google-font-link" rel="stylesheet" href="" />
+  </head>
+  <body>
+    <div id="app">
+      <div id="tab-bar">
+        <div id="tab-list"></div>
+        <button id="tab-add" title="New Tab">+</button>
+      </div>
+      <div id="preset-bar"></div>
+      <div id="main-content">
+        <div id="left-sidebar" class="hidden">
+          <div class="sidebar-header">
+            <span>SSH Connections</span>
+            <button id="sidebar-close" title="Hide sidebar">×</button>
+          </div>
+          <div id="ssh-presets"></div>
+          <button id="ssh-add" class="sidebar-add-btn">+ Add SSH</button>
+        </div>
+        <div id="terminals-container"></div>
+      </div>
+      <div id="status-bar">
+        <button id="sidebar-toggle" title="Toggle SSH sidebar">☰</button>
+        <span id="status-renderer">Renderer: canvas</span>
+        <span id="status-size">80x24</span>
+        <span id="status-tab">Tab 1</span>
+      </div>
     </div>
-    <div id="preset-bar"></div>
-    <div id="terminals-container"></div>
-    <div id="status-bar">
-      <span id="status-renderer">Renderer: canvas</span>
-      <span id="status-size">80x24</span>
-      <span id="status-tab">Tab 1</span>
+    <div id="settings-overlay" class="hidden">
+      <div id="settings-dialog"></div>
     </div>
-  </div>
-  <div id="settings-overlay" class="hidden">
-    <div id="settings-dialog"></div>
-  </div>
-  <script type="module" src="/src/main.js"></script>
-</body>
+    <script type="module" src="/src/main.js"></script>
+  </body>
 </html>

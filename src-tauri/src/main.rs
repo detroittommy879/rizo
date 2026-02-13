@@ -19,8 +19,99 @@ struct PtyManager {
     next_id: AtomicU32,
 }
 
+// ── Shell detection ─────────────────────────────────────────────────────
+
+fn detect_best_shell() -> String {
+    if cfg!(target_os = "windows") {
+        // Try PowerShell 7+ first (pwsh.exe)
+        if which_command("pwsh.exe").is_some() {
+            return "pwsh.exe".to_string();
+        }
+        // Fall back to Windows PowerShell 5.x
+        if which_command("powershell.exe").is_some() {
+            return "powershell.exe".to_string();
+        }
+        // Last resort: cmd.exe
+        "cmd.exe".to_string()
+    } else if cfg!(target_os = "macos") {
+        // macOS: prefer zsh (default since Catalina), then bash
+        std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string())
+    } else {
+        // Linux: respect $SHELL, default to bash
+        std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string())
+    }
+}
+
+fn which_command(cmd: &str) -> Option<std::path::PathBuf> {
+    if cfg!(target_os = "windows") {
+        // Check common Windows paths
+        let paths = [
+            &format!("C:\\Program Files\\PowerShell\\7\\{}", cmd),
+            &format!("C:\\Program Files\\PowerShell\\7-preview\\{}", cmd),
+            &format!("C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\{}", cmd),
+            &format!("C:\\Windows\\System32\\{}", cmd),
+        ];
+        for path in &paths {
+            let p = std::path::Path::new(path);
+            if p.exists() {
+                return Some(p.to_path_buf());
+            }
+        }
+        // Also check PATH environment variable
+        if let Ok(path_env) = std::env::var("PATH") {
+            for dir in path_env.split(';') {
+                let p = std::path::Path::new(dir).join(cmd);
+                if p.exists() {
+                    return Some(p);
+                }
+            }
+        }
+    } else {
+        // Unix: use `which` command
+        if let Ok(output) = std::process::Command::new("which").arg(cmd).output() {
+            if output.status.success() {
+                let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if !path.is_empty() {
+                    return Some(std::path::PathBuf::from(path));
+                }
+            }
+        }
+    }
+    None
+}
+
+fn check_wsl_available() -> bool {
+    if cfg!(target_os = "windows") {
+        which_command("wsl.exe").is_some()
+    } else {
+        false
+    }
+}
+
+#[tauri::command]
+fn get_shell_info() -> Result<serde_json::Value, String> {
+    let default_shell = detect_best_shell();
+    let wsl_available = check_wsl_available();
+    Ok(serde_json::json!({
+        "defaultShell": default_shell,
+        "wslAvailable": wsl_available,
+        "platform": std::env::consts::OS,
+    }))
+}
+
 #[tauri::command]
 fn spawn_pty(cols: u16, rows: u16, app: AppHandle, state: tauri::State<'_, PtyManager>) -> Result<u32, String> {
+    spawn_pty_with_shell(cols, rows, None, app, state)
+}
+
+#[tauri::command]
+fn spawn_pty_with_shell(
+    cols: u16,
+    rows: u16,
+    shell: Option<String>,
+    app: AppHandle,
+    state: tauri::State<'_, PtyManager>,
+) -> Result<u32, String> {
     let pty_system = native_pty_system();
     let pair = pty_system
         .openpty(PtySize {
@@ -31,12 +122,8 @@ fn spawn_pty(cols: u16, rows: u16, app: AppHandle, state: tauri::State<'_, PtyMa
         })
         .map_err(|e| e.to_string())?;
 
-    let cmd = if cfg!(target_os = "windows") {
-        CommandBuilder::new("cmd.exe")
-    } else {
-        let shell = std::env::var("SHELL").unwrap_or_else(|_| "bash".to_string());
-        CommandBuilder::new(shell)
-    };
+    let shell_cmd = shell.unwrap_or_else(detect_best_shell);
+    let cmd = CommandBuilder::new(shell_cmd);
 
     let _child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
     drop(pair.slave);
@@ -168,12 +255,14 @@ fn main() {
         .manage(pty_manager)
         .invoke_handler(tauri::generate_handler![
             spawn_pty,
+            spawn_pty_with_shell,
             write_to_pty,
             resize_pty,
             close_pty,
             load_config,
             save_config,
             get_config_path_display,
+            get_shell_info,
         ])
         .setup(|app| {
             use tauri::menu::{MenuBuilder, SubmenuBuilder};

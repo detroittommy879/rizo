@@ -298,3 +298,9 @@ The architecture supports adding AI features:
 - Stream responses via Tauri events to the frontend
 - Add an AI sidebar panel in the HTML/CSS alongside the terminal container
 - The config system can store AI-related settings
+
+If you want to take a screenshot of an app window, use this cli command:
+
+appsnap -h
+
+the full source and maybe docs are in xterm.js/ folder
