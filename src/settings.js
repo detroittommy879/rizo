@@ -260,10 +260,14 @@ function buildSettingsHTML(config) {
             <input type="checkbox" id="use-gradient" ${t.useGradient ? "checked" : ""} />
             Use Gradient Background
           </label>
-          <div class="dialog-note">⚠️ Note: Gradient mode disables WebGL GPU acceleration to show the gradient. Performance may be slightly reduced, but gradients will display correctly.</div>
+          <div class="dialog-note">⚠️ Note: Gradient mode disables WebGL GPU acceleration to show the gradient.</div>
         </div>
         <div id="gradient-options" class="${t.useGradient ? "" : "hidden"}">
           <div class="setting-group">
+            <label class="checkbox-label" style="margin-bottom: 8px;">
+              <input type="checkbox" id="gradient-animation" ${t.gradientAnimation !== false ? "checked" : ""} />
+              Enable Animated Psychedelic Trails
+            </label>
             <div class="color-row">
               <label>Gradient Start</label>
               <input type="color" id="gradient-start" value="${t.gradientStart}" />
@@ -301,10 +305,10 @@ function buildSettingsHTML(config) {
         <div class="setting-group">
           <h3>Terminal Features</h3>
           <label class="checkbox-label">
-            <input type="checkbox" id="feature-color-test" ${config.features?.colorTestOnStartup !== false ? "checked" : ""} />
-            Show color test on startup
+            <input type="checkbox" id="feature-gpu" ${config.features?.gpuAcceleration !== false ? "checked" : ""} />
+            Enable GPU Acceleration (WebGL)
           </label>
-          <div class="dialog-note">Display colorful welcome banner when opening new tabs</div>
+          <div class="dialog-note">Turn off if you experience visual glitches or cursor issues</div>
         </div>
         <div class="setting-group">
           <label class="checkbox-label">
@@ -348,6 +352,7 @@ function applySettingsFromDialog(dialog) {
   // Background
   t.background = dialog.querySelector("#color-bg").value;
   t.useGradient = dialog.querySelector("#use-gradient").checked;
+  t.gradientAnimation = dialog.querySelector("#gradient-animation").checked;
   t.gradientStart = dialog.querySelector("#gradient-start").value;
   t.gradientEnd = dialog.querySelector("#gradient-end").value;
   t.gradientAngle =
@@ -361,8 +366,8 @@ function applySettingsFromDialog(dialog) {
 
   // Features
   if (!config.features) config.features = {};
-  config.features.colorTestOnStartup =
-    dialog.querySelector("#feature-color-test")?.checked ?? true;
+  config.features.gpuAcceleration =
+    dialog.querySelector("#feature-gpu")?.checked ?? true;
   config.features.autocompleteSuggestions =
     dialog.querySelector("#feature-autocomplete")?.checked ?? true;
 

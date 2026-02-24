@@ -20,6 +20,7 @@ const DEFAULT_CONFIG = {
     cursorAccent: "#000000",
     selectionBackground: "#264f78",
     useGradient: false,
+    gradientAnimation: true,
     gradientStart: "#1a1a2e",
     gradientEnd: "#16213e",
     gradientAngle: 135,
@@ -58,6 +59,7 @@ const DEFAULT_CONFIG = {
   features: {
     colorTestOnStartup: true,
     autocompleteSuggestions: true,
+    gpuAcceleration: true,
   },
 };
 
@@ -157,8 +159,10 @@ export function applyTheme() {
     tab.terminal.options.fontSize = config.theme.fontSize;
     tab.terminal.options.cursorBlink = config.theme.cursorBlink;
 
-    // Ensure WebGL is active
-    if (!tab.webglAddon) {
+    // Ensure WebGL is active if enabled and not in gradient mode
+    const wantWebgl = config.features?.gpuAcceleration !== false && !config.theme.useGradient;
+    
+    if (wantWebgl && !tab.webglAddon) {
       try {
         console.log("Enabling WebGL");
         const newWebglAddon = new WebglAddon();
@@ -171,6 +175,13 @@ export function applyTheme() {
       } catch (e) {
         console.warn("Failed to enable WebGL:", e);
       }
+    } else if (!wantWebgl && tab.webglAddon) {
+      try {
+        tab.webglAddon.dispose();
+      } catch (e) {
+        console.warn("Failed to dispose WebGL:", e);
+      }
+      tab.webglAddon = null;
     }
 
     tab.fitAddon.fit();
@@ -190,38 +201,39 @@ function loadGoogleFont(fontName) {
 function applyGradient() {
   const container = document.getElementById("terminals-container");
   if (config.theme.useGradient) {
-    const { gradientStart, gradientEnd, gradientAngle } = config.theme;
-    container.style.background = `linear-gradient(${gradientAngle}deg, ${gradientStart}, ${gradientEnd})`;
+    const { gradientStart, gradientEnd, gradientAngle, gradientAnimation } = config.theme;
+    
+    // Apply a multi-stop animated gradient
+    container.style.background = `linear-gradient(${gradientAngle}deg, ${gradientStart}, ${gradientEnd}, #8a2be2, #ff1493, ${gradientStart})`;
+    
+    if (gradientAnimation !== false) {
+      container.style.backgroundSize = "400% 400%";
+      container.style.animation = "psychedelicGradient 12s ease infinite";
+      container.classList.add("psychedelic-mode");
+      
+      // Setup mouse move trail effect if not already setup
+      if (!container._hasMouseTrail) {
+        container.addEventListener("mousemove", (e) => {
+          const rect = container.getBoundingClientRect();
+          const x = ((e.clientX - rect.left) / rect.width) * 100;
+          const y = ((e.clientY - rect.top) / rect.height) * 100;
+          container.style.setProperty("--mouse-x", `${x}%`);
+          container.style.setProperty("--mouse-y", `${y}%`);
+        });
+        container._hasMouseTrail = true;
+      }
+    } else {
+      container.style.backgroundSize = "100% 100%";
+      container.style.animation = "none";
+      container.classList.remove("psychedelic-mode");
+    }
   } else {
     // When not using gradient, apply the solid background color to the container
     container.style.background = config.theme.background;
+    container.style.backgroundSize = "100% 100%";
+    container.style.animation = "none";
+    container.classList.remove("psychedelic-mode");
   }
-}
-
-// ── Color test on startup ───────────────────────────────────────────────
-
-function generateColorTest() {
-  if (!config.features?.colorTestOnStartup) return "";
-
-  const lines = [
-    "\x1b[1;36m╔══════════════════════════════════════════╗\x1b[0m",
-    "\x1b[1;36m║\x1b[0m  \x1b[1;33mXTerm Rust\x1b[0m - GPU-Accelerated Terminal  \x1b[1;36m║\x1b[0m",
-    "\x1b[1;36m╚══════════════════════════════════════════╝\x1b[0m",
-    "",
-    "\x1b[1mColor Test:\x1b[0m",
-    "  \x1b[30m⬤ Black      \x1b[31m⬤ Red        \x1b[32m⬤ Green      \x1b[33m⬤ Yellow\x1b[0m",
-    "  \x1b[34m⬤ Blue       \x1b[35m⬤ Magenta    \x1b[36m⬤ Cyan       \x1b[37m⬤ White\x1b[0m",
-    "  \x1b[1;30m⬤ Br Black   \x1b[1;31m⬤ Br Red     \x1b[1;32m⬤ Br Green   \x1b[1;33m⬤ Br Yellow\x1b[0m",
-    "  \x1b[1;34m⬤ Br Blue    \x1b[1;35m⬤ Br Magenta \x1b[1;36m⬤ Br Cyan    \x1b[1;37m⬤ Br White\x1b[0m",
-    "",
-    "\x1b[1mStyles:\x1b[0m \x1b[1mBold\x1b[0m \x1b[2mDim\x1b[0m \x1b[3mItalic\x1b[0m \x1b[4mUnderline\x1b[0m \x1b[9mStrike\x1b[0m",
-    "",
-    `\x1b[32m✓\x1b[0m WebGL2 rendering enabled`,
-    `\x1b[36m⚡\x1b[0m Shell: ${shellInfo?.defaultShell || "detecting..."}`,
-    "",
-  ];
-
-  return lines.join("\r\n") + "\r\n";
 }
 
 // ── Tab management ──────────────────────────────────────────────────────
@@ -244,6 +256,7 @@ async function createTab(shellOverride = null) {
     cursorBlink: config.theme.cursorBlink,
     scrollback: 10000,
     allowProposedApi: true,
+    windowsMode: true,
     allowTransparency: true,
     cols,
     rows,
@@ -258,20 +271,35 @@ async function createTab(shellOverride = null) {
   container.dataset.tabId = id;
   document.getElementById("terminals-container").appendChild(container);
 
+  terminal.onResize(({ cols, rows }) => {
+    invoke("resize_pty", { id: ptyId, cols, rows });
+    if (activeTabId === id) updateStatusBar();
+  });
+
   terminal.open(container);
   fitAddon.fit();
 
+  // Refresh terminal on focus to prevent cursor glitching
+  container.addEventListener("focusin", () => {
+    setTimeout(() => {
+      terminal.refresh(0, terminal.rows - 1);
+    }, 10);
+  });
+
   // WebGL GPU acceleration
   let webglAddon = null;
-  try {
-    webglAddon = new WebglAddon();
-    webglAddon.onContextLoss(() => {
-      webglAddon.dispose();
-      webglAddon = null;
-    });
-    terminal.loadAddon(webglAddon);
-  } catch (e) {
-    console.warn(`Tab ${id}: WebGL failed, using canvas:`, e);
+  const wantWebgl = config.features?.gpuAcceleration !== false && !config.theme.useGradient;
+  if (wantWebgl) {
+    try {
+      webglAddon = new WebglAddon();
+      webglAddon.onContextLoss(() => {
+        webglAddon.dispose();
+        webglAddon = null;
+      });
+      terminal.loadAddon(webglAddon);
+    } catch (e) {
+      console.warn(`Tab ${id}: WebGL failed, using canvas:`, e);
+    }
   }
 
   // Command history tracking for autocomplete
@@ -327,32 +355,8 @@ async function createTab(shellOverride = null) {
     }
   });
 
-  terminal.onResize(({ cols, rows }) => {
-    invoke("resize_pty", { id: ptyId, cols, rows });
-    if (activeTabId === id) updateStatusBar();
-  });
-
-  // Flag to track if we've written the color test
-  let colorTestWritten = false;
-
   const unlistenOutput = await listen(`pty-output-${ptyId}`, (event) => {
     terminal.write(event.payload);
-
-    // Write color test after first output (shell prompt is ready)
-    if (
-      !colorTestWritten &&
-      config.features?.colorTestOnStartup &&
-      !shellOverride
-    ) {
-      colorTestWritten = true;
-      // Small delay to ensure prompt is fully written
-      setTimeout(() => {
-        const colorTest = generateColorTest();
-        if (colorTest) {
-          terminal.write("\r\n" + colorTest);
-        }
-      }, 100);
-    }
   });
 
   const unlistenExit = await listen(`pty-exit-${ptyId}`, () => {
@@ -374,10 +378,16 @@ async function createTab(shellOverride = null) {
   addTabButton(id);
   switchTab(id);
 
-  // Resize observer
+  // Resize observer with debounce to prevent glitching on focus/blur
+  let resizeTimeout;
   const ro = new ResizeObserver(() => {
     if (container.offsetWidth > 0 && container.offsetHeight > 0) {
-      fitAddon.fit();
+      clearTimeout(resizeTimeout);
+      resizeTimeout = setTimeout(() => {
+        if (container.offsetWidth > 0 && container.offsetHeight > 0) {
+          fitAddon.fit();
+        }
+      }, 50);
     }
   });
   ro.observe(container);

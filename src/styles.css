@@ -269,6 +269,31 @@ body {
   overflow: hidden;
   display: flex;
   position: relative;
+  transition: background 0.5s ease;
+}
+
+@keyframes psychedelicGradient {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+/* Base class for psychedelic mode */
+#terminals-container.psychedelic-mode::before {
+  content: "";
+  position: absolute;
+  top: 0; left: 0; right: 0; bottom: 0;
+  pointer-events: none;
+  background: radial-gradient(circle at var(--mouse-x, 50%) var(--mouse-y, 50%), rgba(255, 255, 255, 0.15) 0%, transparent 20%),
+              radial-gradient(circle at calc(100% - var(--mouse-x, 50%)) calc(100% - var(--mouse-y, 50%)), rgba(255, 50, 255, 0.1) 0%, transparent 30%);
+  z-index: 0;
+  mix-blend-mode: color-dodge;
+  transition: all 0.1s ease;
+}
+
+.terminal-pane {
+  position: relative;
+  z-index: 1;
 }
 
 #terminals-container.split-view {
