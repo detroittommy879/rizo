@@ -23,6 +23,8 @@ const DEFAULT_CONFIG = {
     gradientAnimation: true,
     gradientStart: "#1a1a2e",
     gradientEnd: "#16213e",
+    gradientColorC: "#8a2be2",
+    gradientColorD: "#ff1493",
     gradientAngle: 135,
     cursorBlink: true,
     ansiColors: {
@@ -43,6 +45,13 @@ const DEFAULT_CONFIG = {
       brightCyan: "#29b8db",
       brightWhite: "#ffffff",
     },
+  },
+  effects: {
+    crtEnabled: false,
+    crtScanlines: 50,
+    crtTearing: 25,
+    crtCurvature: 50,
+    crtJitter: 5,
   },
   presets: [
     { label: "Clear", command: "cls\r" },
@@ -201,10 +210,10 @@ function loadGoogleFont(fontName) {
 function applyGradient() {
   const container = document.getElementById("terminals-container");
   if (config.theme.useGradient) {
-    const { gradientStart, gradientEnd, gradientAngle, gradientAnimation } = config.theme;
+    const { gradientStart, gradientEnd, gradientColorC, gradientColorD, gradientAngle, gradientAnimation } = config.theme;
     
-    // Apply a multi-stop animated gradient
-    container.style.background = `linear-gradient(${gradientAngle}deg, ${gradientStart}, ${gradientEnd}, #8a2be2, #ff1493, ${gradientStart})`;
+    // Apply a multi-stop animated gradient using CSS variables for colors
+    container.style.background = `linear-gradient(${gradientAngle}deg, ${gradientStart}, ${gradientEnd}, ${gradientColorC || "#8a2be2"}, ${gradientColorD || "#ff1493"}, ${gradientStart})`;
     
     if (gradientAnimation !== false) {
       container.style.backgroundSize = "400% 400%";
@@ -233,6 +242,88 @@ function applyGradient() {
     container.style.backgroundSize = "100% 100%";
     container.style.animation = "none";
     container.classList.remove("psychedelic-mode");
+  }
+}
+
+// ── CRT Effect Management ───────────────────────────────────────────────
+
+function initCRTEffect() {
+  // Inject SVG filters for CRT tearing and RGB shift
+  const svg = document.createElement("div");
+  svg.innerHTML = `
+    <svg style="display:none;">
+      <filter id="crt-tear-filter">
+        <!-- Generates wavy noise for horizontal tearing -->
+        <feTurbulence type="fractalNoise" baseFrequency="0.002 0.15" numOctaves="1" result="noise" seed="0">
+          <animate attributeName="baseFrequency" values="0.002 0.15;0.005 0.18;0.002 0.15" dur="10s" repeatCount="indefinite" />
+          <animate attributeName="seed" values="0;10;50;100;0" dur="2s" calcMode="discrete" repeatCount="indefinite" id="svg-tear-seed" />
+        </feTurbulence>
+        <!-- Maps noise to X displacement -->
+        <feColorMatrix type="matrix" values="1 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 1 0" in="noise" result="coloredNoise"/>
+        <feDisplacementMap xChannelSelector="R" yChannelSelector="G" scale="0" in="SourceGraphic" in2="coloredNoise" id="crt-displacement" />
+      </filter>
+    </svg>
+  `;
+  document.body.appendChild(svg);
+  
+  applyCRTEffect();
+}
+
+export function applyCRTEffect() {
+  const e = config.effects || {};
+  const container = document.getElementById("terminals-container");
+  
+  let overlay = document.getElementById("crt-overlay");
+  if (!overlay) {
+    overlay = document.createElement("div");
+    overlay.id = "crt-overlay";
+    container.appendChild(overlay);
+  }
+
+  if (e.crtEnabled) {
+    overlay.style.display = "block";
+    
+    // Safety fallback defaults
+    const curve = e.crtCurvature ?? 50;
+    const tear = e.crtTearing ?? 25;
+    const scanlines = e.crtScanlines ?? 50;
+    const jitter = e.crtJitter ?? 5;
+    
+    // Set variables mapping 0-100 to usable CSS ranges
+    container.style.setProperty("--crt-scanline-opacity", (scanlines / 100) * 0.4); 
+    container.style.setProperty("--crt-curve", (curve / 100) * 40 + "px"); // up to 40px curve
+    container.style.setProperty("--crt-jitter", (jitter / 100)); // 0.0 to 1.0 multiplier
+    container.style.setProperty("--crt-interference-opacity", (tear / 100) * 0.8); // 0.0 to 0.8
+    
+    // Apply classes for CSS
+    container.classList.add("crt-active");
+    overlay.classList.add("crt-active");
+    
+    // Apply SVG displacement scale for tear effect
+    const tearMap = document.getElementById("crt-displacement");
+    const tearSeed = document.getElementById("svg-tear-seed");
+    if (tearMap) {
+      tearMap.setAttribute("scale", (tear / 100) * 15); // up to 15px tearing
+    }
+    if (tearSeed) {
+      // Speed up the flutter based on tear amount
+      const dur = Math.max(0.2, 5 - ((tear / 100) * 4.8)) + "s";
+      tearSeed.setAttribute("dur", dur);
+    }
+    
+    // Set terminal pane wrapper to use SVG 
+    document.querySelectorAll(".terminal-pane").forEach(pane => {
+      pane.style.filter = "url(#crt-tear-filter)";
+    });
+    
+  } else {
+    overlay.style.display = "none";
+    container.classList.remove("crt-active");
+    overlay.classList.remove("crt-active");
+    
+    document.querySelectorAll(".terminal-pane").forEach(pane => {
+      pane.style.filter = "none";
+    });
   }
 }
 
@@ -270,6 +361,10 @@ async function createTab(shellOverride = null) {
   container.className = "terminal-pane";
   container.dataset.tabId = id;
   document.getElementById("terminals-container").appendChild(container);
+  
+  if (config.effects && config.effects.crtEnabled) {
+    container.style.filter = "url(#crt-tear-filter)";
+  }
 
   terminal.onResize(({ cols, rows }) => {
     invoke("resize_pty", { id: ptyId, cols, rows });
@@ -778,6 +873,7 @@ async function init() {
 
   await loadConfig();
   applyGradient();
+  initCRTEffect();
   loadGoogleFont(config.theme.googleFont);
   rebuildPresetBar();
   rebuildSSHPresets();

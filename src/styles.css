@@ -291,6 +291,109 @@ body {
   transition: all 0.1s ease;
 }
 
+/* ── CRT Effect Overlay ─────────────────────────────────────────────── */
+
+#crt-overlay {
+  position: absolute;
+  top: 0; left: 0; right: 0; bottom: 0;
+  pointer-events: none;
+  z-index: 1000;
+  overflow: hidden;
+  display: none;
+}
+
+#crt-overlay::after {
+  content: " ";
+  display: block;
+  position: absolute;
+  top: 0; left: 0; bottom: 0; right: 0;
+  background: rgba(18, 16, 16, 0.1);
+  opacity: 0;
+  z-index: 2;
+  pointer-events: none;
+}
+
+#crt-overlay.crt-active {
+  display: block;
+  /* Scanlines overlay */
+  background: linear-gradient(
+    rgba(18, 16, 16, 0) 50%, 
+    rgba(0, 0, 0, var(--crt-scanline-opacity, 0.2)) 50%), 
+    linear-gradient(90deg, rgba(255, 0, 0, 0.06), rgba(0, 255, 0, 0.02), rgba(0, 0, 255, 0.06));
+  background-size: 100% 4px, 6px 100%;
+  
+  /* Additional TV Vignette Shadow */
+  box-shadow: inset 0 0 100px rgba(0,0,0,0.8);
+}
+
+/* Static Noise Effect */
+#crt-overlay.crt-active::after {
+  opacity: 1;
+  background-image: url('data:image/svg+xml;utf8,%3Csvg viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg"%3E%3Cfilter id="noiseFilter"%3E%3CfeTurbulence type="fractalNoise" baseFrequency="0.65" numOctaves="3" stitchTiles="stitch"/%3E%3C/filter%3E%3Crect width="100%25" height="100%25" filter="url(%23noiseFilter)"/%3E%3C/svg%3E');
+  background-repeat: repeat;
+  background-size: 200px 200px;
+  mix-blend-mode: overlay;
+  animation: crtStaticNoise 0.2s steps(4) infinite;
+}
+
+/* Rolling RF Interference Line */
+#crt-overlay.crt-active::before {
+  content: " ";
+  display: block;
+  position: absolute;
+  top: 0; left: 0; bottom: 0; right: 0;
+  background: linear-gradient(to bottom, rgba(255,255,255,0), rgba(255,255,255,0) 50%, rgba(255,255,255,0.08) 50%, rgba(255,255,255,0));
+  background-size: 100% 10%;
+  animation: crtRollingBar 6s linear infinite;
+  z-index: 3;
+  pointer-events: none;
+  opacity: var(--crt-interference-opacity, 0.5);
+}
+
+@keyframes crtRollingBar {
+  0% { background-position: 0 0; }
+  100% { background-position: 0 100vh; }
+}
+
+@keyframes crtStaticNoise {
+  0% { transform: translate(0,0) }
+  10% { transform: translate(-5%,-5%) }
+  20% { transform: translate(-10%,5%) }
+  30% { transform: translate(5%,-10%) }
+  40% { transform: translate(-5%,15%) }
+  50% { transform: translate(-10%,5%) }
+  60% { transform: translate(15%,0) }
+  70% { transform: translate(0,10%) }
+  80% { transform: translate(-15%,0) }
+  90% { transform: translate(10%,5%) }
+  100% { transform: translate(5%,0) }
+}
+
+/* Add jitter animation to everything inside the terminals container */
+#terminals-container.crt-active {
+  animation: crtVsyncJitter 0.5s infinite running;
+}
+
+#terminals-container.crt-active .terminal-pane {
+  /* Curved Screen CSS */
+  border-radius: var(--crt-curve, 0px);
+  padding: calc(var(--crt-curve, 0px) / 2);
+  background-color: #0b0b0b; /* A darker base for the tube edge visibility */
+  overflow: hidden;
+  box-shadow: 0 0 20px rgba(255,255,255,0.05); /* tube glow */
+}
+
+@keyframes crtVsyncJitter {
+  0% { transform: translateY(0); }
+  1% { transform: translateY(calc(var(--crt-jitter, 0) * -15px)); opacity: 0.95; filter: blur(2px) contrast(150%); }
+  2% { transform: translateY(calc(var(--crt-jitter, 0) * 10px)); opacity: 1; filter: none; }
+  3% { transform: translateY(0); }
+  50% { transform: translateY(0); }
+  51% { transform: translateY(calc(var(--crt-jitter, 0) * 8px)); filter: blur(1px); }
+  52% { transform: translateY(0); filter: none; }
+  100% { transform: translateY(0); }
+}
+
 .terminal-pane {
   position: relative;
   z-index: 1;

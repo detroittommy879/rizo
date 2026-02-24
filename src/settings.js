@@ -1,4 +1,4 @@
-import { getConfig, saveConfig, applyTheme, rebuildPresetBar } from "./main.js";
+import { getConfig, saveConfig, applyTheme, rebuildPresetBar, applyCRTEffect } from "./main.js";
 import { invoke } from "@tauri-apps/api/core";
 
 // ── Google Fonts monospace list (curated) ────────────────────────────────
@@ -108,6 +108,15 @@ export function openSettings() {
       .classList.toggle("hidden", !e.target.checked);
   });
 
+  // CRT toggle -> grey out options
+  dialog.querySelector("#crt-enabled")?.addEventListener("change", (e) => {
+    const opts = dialog.querySelector("#crt-options");
+    if (opts) {
+      opts.style.opacity = e.target.checked ? "1" : "0.5";
+      opts.style.pointerEvents = e.target.checked ? "auto" : "none";
+    }
+  });
+
   // Color preview update
   dialog.querySelectorAll('input[type="color"]').forEach((input) => {
     input.addEventListener("input", () => {
@@ -185,6 +194,7 @@ function buildSettingsHTML(config) {
       <button class="stab" data-tab="background">Background</button>
       <button class="stab" data-tab="window">Window</button>
       <button class="stab" data-tab="features">Features</button>
+      <button class="stab" data-tab="effects">Effects</button>
     </div>
 
     <div class="settings-body">
@@ -264,10 +274,6 @@ function buildSettingsHTML(config) {
         </div>
         <div id="gradient-options" class="${t.useGradient ? "" : "hidden"}">
           <div class="setting-group">
-            <label class="checkbox-label" style="margin-bottom: 8px;">
-              <input type="checkbox" id="gradient-animation" ${t.gradientAnimation !== false ? "checked" : ""} />
-              Enable Animated Psychedelic Trails
-            </label>
             <div class="color-row">
               <label>Gradient Start</label>
               <input type="color" id="gradient-start" value="${t.gradientStart}" />
@@ -275,6 +281,14 @@ function buildSettingsHTML(config) {
             <div class="color-row">
               <label>Gradient End</label>
               <input type="color" id="gradient-end" value="${t.gradientEnd}" />
+            </div>
+            <div class="color-row">
+              <label>Gradient Color 3</label>
+              <input type="color" id="gradient-color-c" value="${t.gradientColorC || "#8a2be2"}" />
+            </div>
+            <div class="color-row">
+              <label>Gradient Color 4</label>
+              <input type="color" id="gradient-color-d" value="${t.gradientColorD || "#ff1493"}" />
             </div>
             <div class="color-row">
               <label>Angle (deg)</label>
@@ -319,6 +333,43 @@ function buildSettingsHTML(config) {
         </div>
       </div>
 
+      <!-- Effects tab -->
+      <div id="stab-effects" class="stab-content">
+        <div class="setting-group">
+          <h3>Gradient Animations</h3>
+          <label class="checkbox-label" style="margin-bottom: 8px;">
+            <input type="checkbox" id="gradient-animation" ${t.gradientAnimation !== false ? "checked" : ""} />
+            Enable Animated Psychedelic Trails
+          </label>
+          <div class="dialog-note">Requires Gradient Background to be enabled in Background tab.</div>
+        </div>
+        
+        <hr style="border:0; border-top:1px solid #444; margin: 16px 0;" />
+        
+        <div class="setting-group">
+          <h3>Retro CRT / NTSC TV Effect</h3>
+          <label class="checkbox-label" style="margin-bottom: 8px;">
+            <input type="checkbox" id="crt-enabled" ${config.effects?.crtEnabled ? "checked" : ""} />
+            Enable 80s TV Glitch Effect
+          </label>
+        </div>
+        
+        <div id="crt-options" class="setting-group" style="display: flex; flex-direction: column; gap: 8px; opacity: ${config.effects?.crtEnabled ? "1" : "0.5"}; pointer-events: ${config.effects?.crtEnabled ? "auto" : "none"};">
+          <label style="font-size: 13px; color: #ccc;">Scanline Opacity
+            <input type="range" id="crt-scanlines" min="0" max="100" value="${config.effects?.crtScanlines ?? 50}" style="width: 100%; margin-top: 4px;">
+          </label>
+          <label style="font-size: 13px; color: #ccc;">Signal Interference (Tearing)
+            <input type="range" id="crt-tearing" min="0" max="100" value="${config.effects?.crtTearing ?? 25}" style="width: 100%; margin-top: 4px;">
+          </label>
+          <label style="font-size: 13px; color: #ccc;">Screen Curvature
+            <input type="range" id="crt-curvature" min="0" max="100" value="${config.effects?.crtCurvature ?? 50}" style="width: 100%; margin-top: 4px;">
+          </label>
+          <label style="font-size: 13px; color: #ccc;">Vsync Jitter
+            <input type="range" id="crt-jitter" min="0" max="100" value="${config.effects?.crtJitter ?? 5}" style="width: 100%; margin-top: 4px;">
+          </label>
+        </div>
+      </div>
+
     </div>
 
     <div class="settings-footer">
@@ -352,9 +403,10 @@ function applySettingsFromDialog(dialog) {
   // Background
   t.background = dialog.querySelector("#color-bg").value;
   t.useGradient = dialog.querySelector("#use-gradient").checked;
-  t.gradientAnimation = dialog.querySelector("#gradient-animation").checked;
   t.gradientStart = dialog.querySelector("#gradient-start").value;
   t.gradientEnd = dialog.querySelector("#gradient-end").value;
+  t.gradientColorC = dialog.querySelector("#gradient-color-c").value;
+  t.gradientColorD = dialog.querySelector("#gradient-color-d").value;
   t.gradientAngle =
     parseInt(dialog.querySelector("#gradient-angle").value) || 135;
 
@@ -371,7 +423,18 @@ function applySettingsFromDialog(dialog) {
   config.features.autocompleteSuggestions =
     dialog.querySelector("#feature-autocomplete")?.checked ?? true;
 
+  // Effects
+  t.gradientAnimation = dialog.querySelector("#gradient-animation")?.checked ?? true;
+  
+  if (!config.effects) config.effects = {};
+  config.effects.crtEnabled = dialog.querySelector("#crt-enabled")?.checked ?? false;
+  config.effects.crtScanlines = parseInt(dialog.querySelector("#crt-scanlines")?.value) || 0;
+  config.effects.crtTearing = parseInt(dialog.querySelector("#crt-tearing")?.value) || 0;
+  config.effects.crtCurvature = parseInt(dialog.querySelector("#crt-curvature")?.value) || 0;
+  config.effects.crtJitter = parseInt(dialog.querySelector("#crt-jitter")?.value) || 0;
+
   applyTheme();
+  applyCRTEffect();
   rebuildPresetBar();
 }
 
