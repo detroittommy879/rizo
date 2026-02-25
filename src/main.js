@@ -247,28 +247,51 @@ function applyGradient() {
 
 // ── CRT Effect Management ───────────────────────────────────────────────
 
-function initCRTEffect() {
-  const sineWaveSvgURI = `data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='200'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='0' y2='1'%3E%3Cstop offset='0%25' stop-color='%23808080' /%3E%3Cstop offset='25%25' stop-color='%23ff8080' /%3E%3Cstop offset='50%25' stop-color='%23808080' /%3E%3Cstop offset='75%25' stop-color='%23008080' /%3E%3Cstop offset='100%25' stop-color='%23808080' /%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='10' height='200' fill='url(%23g)' /%3E%3C/svg%3E`;
+let crtAnimFrameId;
+let crtSineOffset = 0;
 
+function runCRTAnimation() {
+  const e = config.effects || {};
+  if (e.crtEnabled) {
+    const offsetNode = document.getElementById("svg-sine-offset");
+    if (offsetNode) {
+      // Exactly 1px per frame, wrapping perfectly at 360 degrees (px)
+      crtSineOffset = (crtSineOffset + 1) % 360;
+      offsetNode.setAttribute("dy", crtSineOffset);
+    }
+  }
+  crtAnimFrameId = requestAnimationFrame(runCRTAnimation);
+}
+
+function initCRTEffect() {
   // Inject SVG filters for sine wave scrolling and RGB displacement
   const svg = document.createElement("div");
   svg.innerHTML = `
-    <svg style="display:none;">
-      <filter id="crt-tear-filter" filterUnits="objectBoundingBox" x="0" y="0" width="100%" height="100%">
-        <!-- Sine wave displacement pattern -->
-        <feImage href="${sineWaveSvgURI}" result="sineWave" />
-        <!-- Tile it infinitely across the screen -->
-        <feTile in="sineWave" result="tiledSineWave" />
-        <!-- Scroll the infinite tile downward -->
-        <feOffset in="tiledSineWave" dx="0" dy="0" result="offsetTiledSineWave">
-          <animate attributeName="dy" values="0;200" dur="3.33s" repeatCount="indefinite" id="svg-sine-speed" />
-        </feOffset>
-        <!-- Map the Red channel to horizontal displacement -->
-        <feDisplacementMap xChannelSelector="R" yChannelSelector="G" color-interpolation-filters="sRGB" scale="0" in="SourceGraphic" in2="offsetTiledSineWave" id="crt-displacement" />
-      </filter>
+    <svg style="width:0; height:0; position:absolute;" aria-hidden="true">
+      <defs>
+        <linearGradient id="crt-sine-grad" x1="0" y1="0" x2="0" y2="360" gradientUnits="userSpaceOnUse" spreadMethod="repeat">
+          <stop offset="0%" stop-color="#808080" />
+          <stop offset="25%" stop-color="#ff8080" />
+          <stop offset="50%" stop-color="#808080" />
+          <stop offset="75%" stop-color="#008080" />
+          <stop offset="100%" stop-color="#808080" />
+        </linearGradient>
+
+        <rect id="crt-sine-rect" width="100%" height="300%" y="-100%" fill="url(#crt-sine-grad)" />
+
+        <filter id="crt-tear-filter" filterUnits="objectBoundingBox" x="0" y="0" width="100%" height="100%">
+          <feImage href="#crt-sine-rect" result="sineWave" />
+          <!-- Shift the massive gradient rect downward. Its massive overflow height prevents screen tearing artifacts/squares! -->
+          <feOffset id="svg-sine-offset" dx="0" dy="0" in="sineWave" result="shiftedSine" />
+          <feDisplacementMap xChannelSelector="R" yChannelSelector="G" color-interpolation-filters="sRGB" scale="0" in="SourceGraphic" in2="shiftedSine" id="crt-displacement" />
+        </filter>
+      </defs>
     </svg>
   `;
   document.body.appendChild(svg);
+  
+  if (crtAnimFrameId) cancelAnimationFrame(crtAnimFrameId);
+  requestAnimationFrame(runCRTAnimation);
   
   applyCRTEffect();
 }
@@ -305,14 +328,8 @@ export function applyCRTEffect() {
     
     // Apply SVG displacement scale for tear effect
     const tearMap = document.getElementById("crt-displacement");
-    const tearSpeed = document.getElementById("svg-sine-speed");
     if (tearMap) {
       tearMap.setAttribute("scale", (tear / 100) * 25); // up to 25px sine wave amplitude
-    }
-    if (tearSpeed) {
-      // 1px per frame roughly equals 3.33s for 200px at 60fps. Speed it up if tearing is high.
-      const dur = Math.max(0.5, 6 - ((tear / 100) * 5.5)) + "s";
-      tearSpeed.setAttribute("dur", dur);
     }
     
     // Set terminal pane wrapper to use SVG 
