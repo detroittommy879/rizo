@@ -248,19 +248,23 @@ function applyGradient() {
 // ── CRT Effect Management ───────────────────────────────────────────────
 
 function initCRTEffect() {
-  // Inject SVG filters for CRT tearing and RGB shift
+  const sineWaveSvgURI = `data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='200'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='0' y2='1'%3E%3Cstop offset='0%25' stop-color='%23808080' /%3E%3Cstop offset='25%25' stop-color='%23ff8080' /%3E%3Cstop offset='50%25' stop-color='%23808080' /%3E%3Cstop offset='75%25' stop-color='%23008080' /%3E%3Cstop offset='100%25' stop-color='%23808080' /%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='10' height='200' fill='url(%23g)' /%3E%3C/svg%3E`;
+
+  // Inject SVG filters for sine wave scrolling and RGB displacement
   const svg = document.createElement("div");
   svg.innerHTML = `
     <svg style="display:none;">
-      <filter id="crt-tear-filter">
-        <!-- Generates wavy noise for horizontal tearing -->
-        <feTurbulence type="fractalNoise" baseFrequency="0.002 0.15" numOctaves="1" result="noise" seed="0">
-          <animate attributeName="baseFrequency" values="0.002 0.15;0.005 0.18;0.002 0.15" dur="10s" repeatCount="indefinite" />
-          <animate attributeName="seed" values="0;10;50;100;0" dur="2s" calcMode="discrete" repeatCount="indefinite" id="svg-tear-seed" />
-        </feTurbulence>
-        <!-- Maps noise to X displacement -->
-        <feColorMatrix type="matrix" values="1 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 1 0" in="noise" result="coloredNoise"/>
-        <feDisplacementMap xChannelSelector="R" yChannelSelector="G" scale="0" in="SourceGraphic" in2="coloredNoise" id="crt-displacement" />
+      <filter id="crt-tear-filter" filterUnits="objectBoundingBox" x="0" y="0" width="100%" height="100%">
+        <!-- Sine wave displacement pattern -->
+        <feImage href="${sineWaveSvgURI}" result="sineWave" />
+        <!-- Tile it infinitely across the screen -->
+        <feTile in="sineWave" result="tiledSineWave" />
+        <!-- Scroll the infinite tile downward -->
+        <feOffset in="tiledSineWave" dx="0" dy="0" result="offsetTiledSineWave">
+          <animate attributeName="dy" values="0;200" dur="3.33s" repeatCount="indefinite" id="svg-sine-speed" />
+        </feOffset>
+        <!-- Map the Red channel to horizontal displacement -->
+        <feDisplacementMap xChannelSelector="R" yChannelSelector="G" color-interpolation-filters="sRGB" scale="0" in="SourceGraphic" in2="offsetTiledSineWave" id="crt-displacement" />
       </filter>
     </svg>
   `;
@@ -301,14 +305,14 @@ export function applyCRTEffect() {
     
     // Apply SVG displacement scale for tear effect
     const tearMap = document.getElementById("crt-displacement");
-    const tearSeed = document.getElementById("svg-tear-seed");
+    const tearSpeed = document.getElementById("svg-sine-speed");
     if (tearMap) {
-      tearMap.setAttribute("scale", (tear / 100) * 15); // up to 15px tearing
+      tearMap.setAttribute("scale", (tear / 100) * 25); // up to 25px sine wave amplitude
     }
-    if (tearSeed) {
-      // Speed up the flutter based on tear amount
-      const dur = Math.max(0.2, 5 - ((tear / 100) * 4.8)) + "s";
-      tearSeed.setAttribute("dur", dur);
+    if (tearSpeed) {
+      // 1px per frame roughly equals 3.33s for 200px at 60fps. Speed it up if tearing is high.
+      const dur = Math.max(0.5, 6 - ((tear / 100) * 5.5)) + "s";
+      tearSpeed.setAttribute("dur", dur);
     }
     
     // Set terminal pane wrapper to use SVG 
