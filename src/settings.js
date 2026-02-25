@@ -1,4 +1,4 @@
-import { getConfig, saveConfig, applyTheme, rebuildPresetBar, applyCRTEffect } from "./main.js";
+import { getConfig, saveConfig, applyTheme, rebuildPresetBar, applyCRTEffect, applyStaticEffect } from "./main.js";
 import { invoke } from "@tauri-apps/api/core";
 
 // ── Google Fonts monospace list (curated) ────────────────────────────────
@@ -111,6 +111,15 @@ export function openSettings() {
   // CRT toggle -> grey out options
   dialog.querySelector("#crt-enabled")?.addEventListener("change", (e) => {
     const opts = dialog.querySelector("#crt-options");
+    if (opts) {
+      opts.style.opacity = e.target.checked ? "1" : "0.5";
+      opts.style.pointerEvents = e.target.checked ? "auto" : "none";
+    }
+  });
+
+  // Static toggle -> grey out options
+  dialog.querySelector("#static-enabled")?.addEventListener("change", (e) => {
+    const opts = dialog.querySelector("#static-options");
     if (opts) {
       opts.style.opacity = e.target.checked ? "1" : "0.5";
       opts.style.pointerEvents = e.target.checked ? "auto" : "none";
@@ -345,27 +354,48 @@ function buildSettingsHTML(config) {
         </div>
         
         <hr style="border:0; border-top:1px solid #444; margin: 16px 0;" />
-        
+
+        <!-- Static Noise Effect -->
         <div class="setting-group">
-          <h3>Retro CRT / NTSC TV Effect</h3>
+          <h3>📺 Analog Static Noise (WebGL)</h3>
           <label class="checkbox-label" style="margin-bottom: 8px;">
-            <input type="checkbox" id="crt-enabled" ${config.effects?.crtEnabled ? "checked" : ""} />
-            Enable 80s TV Glitch Effect
+            <input type="checkbox" id="static-enabled" ${config.effects?.staticEnabled ? "checked" : ""} />
+            Enable Static Noise Overlay
+          </label>
+          <div class="dialog-note">Film-grain style noise blended over the terminal. Uses <code>mix-blend-mode: screen</code>.</div>
+        </div>
+        <div id="static-options" class="setting-group" style="display: flex; flex-direction: column; gap: 8px; opacity: ${config.effects?.staticEnabled ? "1" : "0.5"}; pointer-events: ${config.effects?.staticEnabled ? "auto" : "none"}; padding-left: 8px;">
+          <label style="font-size: 13px; color: #ccc;">Intensity (overlay brightness)
+            <input type="range" id="static-intensity" min="0" max="100" value="${config.effects?.staticIntensity ?? 50}" style="width: 100%; margin-top: 4px;">
+          </label>
+          <label style="font-size: 13px; color: #ccc;">Density (grain size)
+            <input type="range" id="static-density" min="0" max="100" value="${config.effects?.staticDensity ?? 60}" style="width: 100%; margin-top: 4px;">
+          </label>
+          <label style="font-size: 13px; color: #ccc;">Amplitude (grain contrast)
+            <input type="range" id="static-amplitude" min="0" max="100" value="${config.effects?.staticAmplitude ?? 55}" style="width: 100%; margin-top: 4px;">
           </label>
         </div>
-        
-        <div id="crt-options" class="setting-group" style="display: flex; flex-direction: column; gap: 8px; opacity: ${config.effects?.crtEnabled ? "1" : "0.5"}; pointer-events: ${config.effects?.crtEnabled ? "auto" : "none"};">
+
+        <hr style="border:0; border-top:1px solid #444; margin: 16px 0;" />
+
+        <!-- CRT Scanlines -->
+        <div class="setting-group">
+          <h3>🔲 CRT Scanlines + Phosphor Glow (CSS)</h3>
+          <label class="checkbox-label" style="margin-bottom: 8px;">
+            <input type="checkbox" id="crt-enabled" ${config.effects?.crtEnabled ? "checked" : ""} />
+            Enable CRT Scanlines Effect
+          </label>
+          <div class="dialog-note">Clean scanline overlay with phosphor glow and barrel distortion. No jitter.</div>
+        </div>
+        <div id="crt-options" class="setting-group" style="display: flex; flex-direction: column; gap: 8px; opacity: ${config.effects?.crtEnabled ? "1" : "0.5"}; pointer-events: ${config.effects?.crtEnabled ? "auto" : "none"}; padding-left: 8px;">
           <label style="font-size: 13px; color: #ccc;">Scanline Opacity
             <input type="range" id="crt-scanlines" min="0" max="100" value="${config.effects?.crtScanlines ?? 50}" style="width: 100%; margin-top: 4px;">
           </label>
-          <label style="font-size: 13px; color: #ccc;">Signal Interference (Tearing)
+          <label style="font-size: 13px; color: #ccc;">Phosphor Glow
             <input type="range" id="crt-tearing" min="0" max="100" value="${config.effects?.crtTearing ?? 25}" style="width: 100%; margin-top: 4px;">
           </label>
-          <label style="font-size: 13px; color: #ccc;">Screen Curvature
+          <label style="font-size: 13px; color: #ccc;">Screen Curvature (Barrel Distortion)
             <input type="range" id="crt-curvature" min="0" max="100" value="${config.effects?.crtCurvature ?? 50}" style="width: 100%; margin-top: 4px;">
-          </label>
-          <label style="font-size: 13px; color: #ccc;">Vsync Jitter
-            <input type="range" id="crt-jitter" min="0" max="100" value="${config.effects?.crtJitter ?? 5}" style="width: 100%; margin-top: 4px;">
           </label>
         </div>
       </div>
@@ -427,13 +457,21 @@ function applySettingsFromDialog(dialog) {
   t.gradientAnimation = dialog.querySelector("#gradient-animation")?.checked ?? true;
   
   if (!config.effects) config.effects = {};
-  config.effects.crtEnabled = dialog.querySelector("#crt-enabled")?.checked ?? false;
-  config.effects.crtScanlines = parseInt(dialog.querySelector("#crt-scanlines")?.value) || 0;
-  config.effects.crtTearing = parseInt(dialog.querySelector("#crt-tearing")?.value) || 0;
-  config.effects.crtCurvature = parseInt(dialog.querySelector("#crt-curvature")?.value) || 0;
-  config.effects.crtJitter = parseInt(dialog.querySelector("#crt-jitter")?.value) || 0;
+
+  // Static noise effect
+  config.effects.staticEnabled   = dialog.querySelector("#static-enabled")?.checked   ?? false;
+  config.effects.staticIntensity = parseInt(dialog.querySelector("#static-intensity")?.value) || 50;
+  config.effects.staticDensity   = parseInt(dialog.querySelector("#static-density")?.value)   || 60;
+  config.effects.staticAmplitude = parseInt(dialog.querySelector("#static-amplitude")?.value) || 55;
+
+  // CRT scanlines effect
+  config.effects.crtEnabled   = dialog.querySelector("#crt-enabled")?.checked ?? false;
+  config.effects.crtScanlines = parseInt(dialog.querySelector("#crt-scanlines")?.value)  || 0;
+  config.effects.crtTearing   = parseInt(dialog.querySelector("#crt-tearing")?.value)    || 0;
+  config.effects.crtCurvature = parseInt(dialog.querySelector("#crt-curvature")?.value)  || 0;
 
   applyTheme();
+  applyStaticEffect();
   applyCRTEffect();
   rebuildPresetBar();
 }

@@ -50,8 +50,11 @@ const DEFAULT_CONFIG = {
     crtEnabled: false,
     crtScanlines: 50,
     crtTearing: 25,
-    crtCurvature: 50,
-    crtJitter: 5,
+    crtCurvature: 30,
+    staticEnabled: false,
+    staticIntensity: 50,
+    staticDensity: 60,
+    staticAmplitude: 55,
   },
   presets: [
     { label: "Clear", command: "cls\r" },
@@ -245,108 +248,269 @@ function applyGradient() {
   }
 }
 
-// ── CRT Effect Management ───────────────────────────────────────────────
+// ── Effect 1: WebGL Analog Static Noise Overlay ─────────────────────────
 
-let crtAnimFrameId;
-let crtSineOffset = 0;
+let _staticGL      = null;
+let _staticProg    = null;
+let _staticBuf     = null;
+let _staticLocs    = null;
+let _staticRunning = false;
+let _staticRAF     = null;
+let _staticRenderFn = null;
 
-function runCRTAnimation() {
-  const e = config.effects || {};
-  if (e.crtEnabled) {
-    const offsetNode = document.getElementById("svg-sine-offset");
-    if (offsetNode) {
-      // Exactly 1px per frame, wrapping perfectly at 360 degrees (px)
-      crtSineOffset = (crtSineOffset + 1) % 360;
-      offsetNode.setAttribute("dy", crtSineOffset);
+function initStaticEffect() {
+  const canvas = document.getElementById("static-canvas");
+  if (!canvas) { console.error("No #static-canvas element found"); return; }
+
+  const gl = canvas.getContext("webgl", { alpha: true, premultipliedAlpha: false, antialias: false });
+  if (!gl) { console.warn("WebGL not available for static effect"); return; }
+  _staticGL = gl;
+
+  const vertSrc = `
+    attribute vec2 a_pos;
+    void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }
+  `;
+  const fragSrc = `
+    precision highp float;
+    uniform vec2  u_res;
+    uniform float u_time;
+    uniform float u_intensity;
+    uniform float u_density;
+    uniform float u_amplitude;
+
+    float hash(vec2 p) {
+      return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
     }
+
+    void main() {
+      vec2 uv = gl_FragCoord.xy / u_res;
+      float slow = sin(u_time * 0.31) * 0.5 + 0.5;
+      float med  = sin(u_time * 0.79 + 1.0) * 0.5 + 0.5;
+      vec2 base = uv * 1100.0 * u_density * (0.85 + slow * 0.3);
+      float t1 = u_time * 53.0;
+      float t2 = u_time * 38.0;
+      float t3 = u_time * 67.0;
+      float n1 = hash(base + vec2(t1, t1 * 0.73));
+      float n2 = hash(base * 1.55 + vec2(t2 * 0.91, t2));
+      float n3 = hash(base * 2.30 + vec2(t3, t3 * 1.17));
+      float w1 = 0.50 + med  * 0.20;
+      float w2 = 0.30 + slow * 0.15;
+      float w3 = 1.0 - w1 - w2;
+      float grain = n1*w1 + n2*w2 + n3*w3;
+      grain = grain * 2.0 - 1.0;
+      grain = sign(grain) * pow(abs(grain), 0.75);
+      grain = grain * u_amplitude;
+      grain = clamp(grain, 0.0, 1.0);
+      grain = pow(grain, 1.15);
+      gl_FragColor = vec4(vec3(grain), u_intensity);
+    }
+  `;
+
+  function mkShader(type, src) {
+    const s = gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+      console.error("Static shader compile error:", gl.getShaderInfoLog(s));
+      return null;
+    }
+    return s;
   }
-  crtAnimFrameId = requestAnimationFrame(runCRTAnimation);
+
+  const vs = mkShader(gl.VERTEX_SHADER,   vertSrc);
+  const fs = mkShader(gl.FRAGMENT_SHADER, fragSrc);
+  if (!vs || !fs) return;
+
+  const prog = gl.createProgram();
+  gl.attachShader(prog, vs);
+  gl.attachShader(prog, fs);
+  gl.bindAttribLocation(prog, 0, "a_pos");
+  gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+    console.error("Static program link error:", gl.getProgramInfoLog(prog));
+    return;
+  }
+  _staticProg = prog;
+
+  const buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 1,-1, -1,1, -1,1, 1,-1, 1,1]), gl.STATIC_DRAW);
+  _staticBuf = buf;
+
+  _staticLocs = {
+    pos:       gl.getAttribLocation(prog, "a_pos"),
+    res:       gl.getUniformLocation(prog, "u_res"),
+    time:      gl.getUniformLocation(prog, "u_time"),
+    intensity: gl.getUniformLocation(prog, "u_intensity"),
+    density:   gl.getUniformLocation(prog, "u_density"),
+    amplitude: gl.getUniformLocation(prog, "u_amplitude"),
+  };
+  console.log("Static effect: WebGL initialized, locs:", _staticLocs);
+
+  function resize() {
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width  = Math.floor(window.innerWidth  * dpr);
+    canvas.height = Math.floor(window.innerHeight * dpr);
+    canvas.style.width  = window.innerWidth  + "px";
+    canvas.style.height = window.innerHeight + "px";
+    gl.viewport(0, 0, canvas.width, canvas.height);
+  }
+  resize();
+  window.addEventListener("resize", resize);
+
+  // Assign render fn FIRST so applyStaticEffect can use it immediately
+  _staticRenderFn = function render(now) {
+    if (!_staticRunning) return;
+    const e = config.effects || {};
+    const intensity = Math.max(0.05, (e.staticIntensity ?? 50) / 100 * 0.9);
+    const density   = 0.4 + (e.staticDensity   ?? 60) / 100 * 1.6;
+    const amplitude = 0.2 + (e.staticAmplitude ?? 55) / 100 * 1.0;
+
+    gl.useProgram(_staticProg);
+    gl.disable(gl.DEPTH_TEST);
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    gl.clearColor(0, 0, 0, 0);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, _staticBuf);
+    gl.enableVertexAttribArray(_staticLocs.pos);
+    gl.vertexAttribPointer(_staticLocs.pos, 2, gl.FLOAT, false, 0, 0);
+
+    gl.uniform2f(_staticLocs.res,       canvas.width, canvas.height);
+    gl.uniform1f(_staticLocs.time,      now * 0.001);
+    gl.uniform1f(_staticLocs.intensity, intensity);
+    gl.uniform1f(_staticLocs.density,   density);
+    gl.uniform1f(_staticLocs.amplitude, amplitude);
+
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
+    _staticRAF = requestAnimationFrame(_staticRenderFn);
+  };
+
+  // Apply now (defaults to hidden since staticEnabled:false by default)
+  applyStaticEffect();
 }
 
+export function applyStaticEffect() {
+  const canvas = document.getElementById("static-canvas");
+  if (!canvas) return;
+  const e = config.effects || {};
+  const enabled = !!(e.staticEnabled);
+
+  canvas.style.display      = enabled ? "block" : "none";
+  canvas.style.mixBlendMode = "screen";
+  canvas.style.opacity      = "0.9";
+
+  if (enabled && !_staticRunning) {
+    _staticRunning = true;
+    if (_staticRenderFn) {
+      console.log("Starting static render loop");
+      requestAnimationFrame(_staticRenderFn);
+    } else {
+      console.warn("Static render fn not ready yet");
+    }
+  } else if (!enabled && _staticRunning) {
+    _staticRunning = false;
+    if (_staticRAF) { cancelAnimationFrame(_staticRAF); _staticRAF = null; }
+  }
+}
+
+// ── Effect 2: CSS Scanlines + Phosphor Glow + animated scan bar ──────────
+
+let _crtAnimRAF   = null;
+let _crtScanPos   = 0; // 0..1 fraction of screen height, scrolling downward
+
 function initCRTEffect() {
-  // Inject SVG filters for sine wave scrolling and RGB displacement
-  const svg = document.createElement("div");
-  svg.innerHTML = `
-    <svg style="width:0; height:0; position:absolute;" aria-hidden="true">
-      <defs>
-        <linearGradient id="crt-sine-grad" x1="0" y1="0" x2="0" y2="360" gradientUnits="userSpaceOnUse" spreadMethod="repeat">
-          <stop offset="0%" stop-color="#808080" />
-          <stop offset="25%" stop-color="#ff8080" />
-          <stop offset="50%" stop-color="#808080" />
-          <stop offset="75%" stop-color="#008080" />
-          <stop offset="100%" stop-color="#808080" />
-        </linearGradient>
-
-        <rect id="crt-sine-rect" width="100%" height="300%" y="-100%" fill="url(#crt-sine-grad)" />
-
-        <filter id="crt-tear-filter" filterUnits="objectBoundingBox" x="0" y="0" width="100%" height="100%">
-          <feImage href="#crt-sine-rect" result="sineWave" />
-          <!-- Shift the massive gradient rect downward. Its massive overflow height prevents screen tearing artifacts/squares! -->
-          <feOffset id="svg-sine-offset" dx="0" dy="0" in="sineWave" result="shiftedSine" />
-          <feDisplacementMap xChannelSelector="R" yChannelSelector="G" color-interpolation-filters="sRGB" scale="0" in="SourceGraphic" in2="shiftedSine" id="crt-displacement" />
-        </filter>
-      </defs>
-    </svg>
-  `;
-  document.body.appendChild(svg);
-  
-  if (crtAnimFrameId) cancelAnimationFrame(crtAnimFrameId);
-  requestAnimationFrame(runCRTAnimation);
-  
   applyCRTEffect();
+}
+
+function _tickCRT() {
+  const overlay = document.getElementById("crt-overlay");
+  if (!overlay) { _crtAnimRAF = requestAnimationFrame(_tickCRT); return; }
+  const e = config.effects || {};
+  if (!e.crtEnabled) { _crtAnimRAF = requestAnimationFrame(_tickCRT); return; }
+
+  // Scroll the scan bar at ~30px/s
+  _crtScanPos = (_crtScanPos + 0.003) % 1;
+  overlay.style.setProperty("--scan-pos", _crtScanPos.toFixed(4));
+  _crtAnimRAF = requestAnimationFrame(_tickCRT);
 }
 
 export function applyCRTEffect() {
   const e = config.effects || {};
   const container = document.getElementById("terminals-container");
-  
+  const mainContent = document.getElementById("main-content");
+
   let overlay = document.getElementById("crt-overlay");
   if (!overlay) {
     overlay = document.createElement("div");
     overlay.id = "crt-overlay";
-    container.appendChild(overlay);
+    // Place overlay INSIDE main-content so it covers only the terminal area
+    mainContent.appendChild(overlay);
   }
+
+  // Always clear terminal pane filters — no more SVG displacement
+  document.querySelectorAll(".terminal-pane").forEach(pane => {
+    pane.style.filter = "none";
+  });
 
   if (e.crtEnabled) {
     overlay.style.display = "block";
-    
-    // Safety fallback defaults
-    const curve = e.crtCurvature ?? 50;
-    const tear = e.crtTearing ?? 25;
-    const scanlines = e.crtScanlines ?? 50;
-    const jitter = e.crtJitter ?? 5;
-    
-    // Set variables mapping 0-100 to usable CSS ranges
-    container.style.setProperty("--crt-scanline-opacity", (scanlines / 100) * 0.4); 
-    container.style.setProperty("--crt-curve", (curve / 100) * 40 + "px"); // up to 40px curve
-    container.style.setProperty("--crt-jitter", (jitter / 100)); // 0.0 to 1.0 multiplier
-    container.style.setProperty("--crt-interference-opacity", (tear / 100) * 0.8); // 0.0 to 0.8
-    
-    // Apply classes for CSS
+
+    const scanlines  = e.crtScanlines ?? 50;
+    const glow       = e.crtTearing   ?? 25;
+    const curvature  = e.crtCurvature ?? 30;
+
+    // Scanline CSS: repeating horizontal lines
+    const scanOpacity = (scanlines / 100) * 0.45;
+    overlay.style.background = `repeating-linear-gradient(
+      to bottom,
+      transparent 0px,
+      transparent 3px,
+      rgba(0,0,0,${scanOpacity.toFixed(3)}) 3px,
+      rgba(0,0,0,${scanOpacity.toFixed(3)}) 4px
+    )`;
+
+    // Phosphor glow
+    const glowPx = (glow / 100) * 18;
+    const glowOpacity = (glow / 100) * 0.5;
+    overlay.style.boxShadow = glowPx > 0
+      ? `inset 0 0 ${glowPx}px rgba(80,255,120,${glowOpacity.toFixed(3)})`
+      : "none";
+
+    // Barrel distortion
+    const curvePx = (curvature / 100) * 500;
+    if (curvePx > 10) {
+      const scaleFactor = 1 + (curvature / 100) * 0.02;
+      container.style.perspective = `${Math.round(curvePx * 8)}px`;
+      container.style.transform   = `scale(${scaleFactor.toFixed(4)})`;
+      container.style.borderRadius = `${Math.round(curvature / 5)}px`;
+    } else {
+      container.style.perspective  = "none";
+      container.style.transform    = "none";
+      container.style.borderRadius = "0";
+    }
+
     container.classList.add("crt-active");
     overlay.classList.add("crt-active");
-    
-    // Apply SVG displacement scale for tear effect
-    const tearMap = document.getElementById("crt-displacement");
-    if (tearMap) {
-      tearMap.setAttribute("scale", (tear / 100) * 25); // up to 25px sine wave amplitude
-    }
-    
-    // Set terminal pane wrapper to use SVG 
-    document.querySelectorAll(".terminal-pane").forEach(pane => {
-      pane.style.filter = "url(#crt-tear-filter)";
-    });
-    
+
+    // Start animated scan bar loop if not running
+    if (!_crtAnimRAF) _crtAnimRAF = requestAnimationFrame(_tickCRT);
+
   } else {
     overlay.style.display = "none";
     container.classList.remove("crt-active");
     overlay.classList.remove("crt-active");
-    
+    container.style.perspective  = "none";
+    container.style.transform    = "none";
+    container.style.borderRadius = "0";
     document.querySelectorAll(".terminal-pane").forEach(pane => {
       pane.style.filter = "none";
     });
+    // Leave _crtAnimRAF running (it checks crtEnabled each tick)
   }
 }
+
 
 // ── Tab management ──────────────────────────────────────────────────────
 
@@ -383,9 +547,7 @@ async function createTab(shellOverride = null) {
   container.dataset.tabId = id;
   document.getElementById("terminals-container").appendChild(container);
   
-  if (config.effects && config.effects.crtEnabled) {
-    container.style.filter = "url(#crt-tear-filter)";
-  }
+  // Static and CRT effects are applied via canvas/CSS overlays, not per-pane filters
 
   terminal.onResize(({ cols, rows }) => {
     invoke("resize_pty", { id: ptyId, cols, rows });
@@ -894,6 +1056,7 @@ async function init() {
 
   await loadConfig();
   applyGradient();
+  initStaticEffect();
   initCRTEffect();
   loadGoogleFont(config.theme.googleFont);
   rebuildPresetBar();
