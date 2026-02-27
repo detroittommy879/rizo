@@ -316,29 +316,13 @@ body {
   border-radius: inherit;
 }
 
-/* crt-active class is added/removed by JS; scanline bg + box-shadow set inline */
+/* crt-active class is added/removed by JS; displacement is handled by SVG filter */
 #crt-overlay.crt-active {
   display: block;
 }
 
-/* Animated rolling phosphor scan bar — JS updates --scan-pos each rAF */
-#crt-overlay.crt-active::after {
-  content: "";
-  position: absolute;
-  top: 0; left: 0; right: 0;
-  height: 4%;
-  background: linear-gradient(
-    to bottom,
-    transparent 0%,
-    rgba(180, 255, 200, 0.06) 30%,
-    rgba(180, 255, 200, 0.12) 50%,
-    rgba(180, 255, 200, 0.06) 70%,
-    transparent 100%
-  );
-  transform: translateY(calc(var(--scan-pos, 0) * 2500%));
-  pointer-events: none;
-  will-change: transform;
-}
+/* Animated rolling phosphor scan bar removed as requested to keep it simple */
+
 
 #terminals-container.crt-active {
   /* Barrel distortion transform applied inline by applyCRTEffect() */

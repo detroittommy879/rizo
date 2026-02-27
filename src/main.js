@@ -48,10 +48,10 @@ const DEFAULT_CONFIG = {
   },
   effects: {
     crtEnabled: false,
-    crtScanlines: 50,
-    crtTearing: 25,
+    crtShift: 15,
     crtCurvature: 30,
     staticEnabled: false,
+    staticSimple: false,
     staticIntensity: 50,
     staticDensity: 60,
     staticAmplitude: 55,
@@ -277,6 +277,7 @@ function initStaticEffect() {
     uniform float u_intensity;
     uniform float u_density;
     uniform float u_amplitude;
+    uniform float u_simple;      // boolean-like 0.0 or 1.0
 
     float hash(vec2 p) {
       return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
@@ -284,6 +285,14 @@ function initStaticEffect() {
 
     void main() {
       vec2 uv = gl_FragCoord.xy / u_res;
+      
+      if (u_simple > 0.5) {
+        // Simple uniform high-speed noise logic
+        float n = hash(uv * 1000.0 * u_density + vec2(u_time * 123.0, u_time * 97.0));
+        gl_FragColor = vec4(vec3(n * u_amplitude), u_intensity);
+        return;
+      }
+      
       float slow = sin(u_time * 0.31) * 0.5 + 0.5;
       float med  = sin(u_time * 0.79 + 1.0) * 0.5 + 0.5;
       vec2 base = uv * 1100.0 * u_density * (0.85 + slow * 0.3);
@@ -293,9 +302,9 @@ function initStaticEffect() {
       float n1 = hash(base + vec2(t1, t1 * 0.73));
       float n2 = hash(base * 1.55 + vec2(t2 * 0.91, t2));
       float n3 = hash(base * 2.30 + vec2(t3, t3 * 1.17));
-      float w1 = 0.50 + med  * 0.20;
-      float w2 = 0.30 + slow * 0.15;
-      float w3 = 1.0 - w1 - w2;
+      float w1 = 0.40 + med  * 0.20; // 0.4 to 0.6
+      float w2 = 0.20 + slow * 0.15; // 0.2 to 0.35
+      float w3 = 1.0 - w1 - w2;      // always >= 0.05
       float grain = n1*w1 + n2*w2 + n3*w3;
       grain = grain * 2.0 - 1.0;
       grain = sign(grain) * pow(abs(grain), 0.75);
@@ -344,6 +353,7 @@ function initStaticEffect() {
     intensity: gl.getUniformLocation(prog, "u_intensity"),
     density:   gl.getUniformLocation(prog, "u_density"),
     amplitude: gl.getUniformLocation(prog, "u_amplitude"),
+    simple:    gl.getUniformLocation(prog, "u_simple"),
   };
   console.log("Static effect: WebGL initialized, locs:", _staticLocs);
 
@@ -377,11 +387,18 @@ function initStaticEffect() {
     gl.enableVertexAttribArray(_staticLocs.pos);
     gl.vertexAttribPointer(_staticLocs.pos, 2, gl.FLOAT, false, 0, 0);
 
+    // Oscillate time back and forth using a sine wave so we stay in the "good" initial zone
+    // instead of growing infinitely which breaks the hash precision and causes drifting bars.
+    const elapsedSeconds = now * 0.001;
+    // A slow sine wave that goes from 0 to about 5 and back
+    const oscillatingTime = Math.sin(elapsedSeconds * 0.2) * 5.0;
+
     gl.uniform2f(_staticLocs.res,       canvas.width, canvas.height);
-    gl.uniform1f(_staticLocs.time,      now * 0.001);
+    gl.uniform1f(_staticLocs.time,      oscillatingTime);
     gl.uniform1f(_staticLocs.intensity, intensity);
     gl.uniform1f(_staticLocs.density,   density);
     gl.uniform1f(_staticLocs.amplitude, amplitude);
+    gl.uniform1f(_staticLocs.simple,    (e.staticSimple ? 1.0 : 0.0));
 
     gl.drawArrays(gl.TRIANGLES, 0, 6);
     _staticRAF = requestAnimationFrame(_staticRenderFn);
@@ -417,22 +434,87 @@ export function applyStaticEffect() {
 
 // ── Effect 2: CSS Scanlines + Phosphor Glow + animated scan bar ──────────
 
-let _crtAnimRAF   = null;
-let _crtScanPos   = 0; // 0..1 fraction of screen height, scrolling downward
+let _crtAnimRAF    = null;
+let _crtScanPos    = 0; // 0..1 fraction of screen height, scrolling downward
+let _crtWaveCanvas = null;
+let _crtWaveCtx    = null;
+let _crtWaveTime   = 0;
 
 function initCRTEffect() {
+  // Create hidden canvas for displacement map
+  _crtWaveCanvas = document.createElement("canvas");
+  _crtWaveCanvas.width = 64;   // Horizontal res doesn't need to be high for horizontal shift
+  _crtWaveCanvas.height = 1024; // High vertical res for per-line control
+  _crtWaveCtx = _crtWaveCanvas.getContext("2d");
+
+  // Inject SVG filter for displacement
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("style", "position:absolute; width:0; height:0; pointer-events:none;");
+  svg.setAttribute("aria-hidden", "true");
+  svg.innerHTML = `
+    <defs>
+      <filter id="crt-displace-filter">
+        <feImage id="displace-image" width="100%" height="100%" preserveAspectRatio="none" />
+        <feDisplacementMap in="SourceGraphic" in2="displace-image" scale="10" xChannelSelector="R" yChannelSelector="G" />
+      </filter>
+    </defs>
+  `;
+  document.body.appendChild(svg);
+
   applyCRTEffect();
 }
 
-function _tickCRT() {
+function _tickCRT(now) {
   const overlay = document.getElementById("crt-overlay");
   if (!overlay) { _crtAnimRAF = requestAnimationFrame(_tickCRT); return; }
   const e = config.effects || {};
   if (!e.crtEnabled) { _crtAnimRAF = requestAnimationFrame(_tickCRT); return; }
 
-  // Scroll the scan bar at ~30px/s
-  _crtScanPos = (_crtScanPos + 0.003) % 1;
-  overlay.style.setProperty("--scan-pos", _crtScanPos.toFixed(4));
+  // 1. Update displacement wave canvas
+  if (_crtWaveCtx) {
+    const ctx = _crtWaveCtx;
+    const w = _crtWaveCanvas.width;
+    const h = _crtWaveCanvas.height;
+    
+    // Fill with neutral 127 (no shift)
+    ctx.fillStyle = "rgb(127,127,0)"; 
+    ctx.fillRect(0,0,w,h);
+
+    _crtWaveTime += 0.04;
+    // u_shift is the max pixel offset (up to 40px)
+    const shiftScale = e.crtShift ?? 15;
+    
+    // Draw sine wave shift into the Red channel
+    // We want a rolling wave that looks like signal interference
+    for (let y = 0; y < h; y++) {
+      // Main slow wave + faster jitter
+      const wave = Math.sin(y * 0.01 + _crtWaveTime) * 0.7 + 
+                   Math.sin(y * 0.05 - _crtWaveTime * 2.0) * 0.3;
+      
+      // Map wave -1..1 to 0..255 centering at 127
+      // We use the full range of the Red channel to drive the displacement map's X offset.
+      const r = 127 + Math.floor(wave * 127);
+      ctx.fillStyle = `rgb(${r},127,0)`;
+      ctx.fillRect(0, y, w, 1);
+    }
+
+    // Update the SVG feImage with the canvas data
+    const feImage = document.getElementById("displace-image");
+    if (feImage) {
+      feImage.setAttributeNS("http://www.w3.org/1999/xlink", "xlink:href", _crtWaveCanvas.toDataURL());
+    }
+    
+    // Update the scale of the displacement map
+    const filter = document.querySelector("#crt-displace-filter feDisplacementMap");
+    if (filter) {
+      // Scale controls the max pixel shift. SVG feDisplacementMap calculates:
+      // pixelShiftX = scale * ( (R - 0.5) )  -- actually varies by impl, but basically 'scale' is pixels.
+      // Since map is 0..255 (normalized 0..1), (R-0.5) is -0.5..0.5
+      // So scale=40 means +/- 20px shift.
+      filter.setAttribute("scale", shiftScale.toString());
+    }
+  }
+
   _crtAnimRAF = requestAnimationFrame(_tickCRT);
 }
 
@@ -457,26 +539,7 @@ export function applyCRTEffect() {
   if (e.crtEnabled) {
     overlay.style.display = "block";
 
-    const scanlines  = e.crtScanlines ?? 50;
-    const glow       = e.crtTearing   ?? 25;
     const curvature  = e.crtCurvature ?? 30;
-
-    // Scanline CSS: repeating horizontal lines
-    const scanOpacity = (scanlines / 100) * 0.45;
-    overlay.style.background = `repeating-linear-gradient(
-      to bottom,
-      transparent 0px,
-      transparent 3px,
-      rgba(0,0,0,${scanOpacity.toFixed(3)}) 3px,
-      rgba(0,0,0,${scanOpacity.toFixed(3)}) 4px
-    )`;
-
-    // Phosphor glow
-    const glowPx = (glow / 100) * 18;
-    const glowOpacity = (glow / 100) * 0.5;
-    overlay.style.boxShadow = glowPx > 0
-      ? `inset 0 0 ${glowPx}px rgba(80,255,120,${glowOpacity.toFixed(3)})`
-      : "none";
 
     // Barrel distortion
     const curvePx = (curvature / 100) * 500;
@@ -491,10 +554,13 @@ export function applyCRTEffect() {
       container.style.borderRadius = "0";
     }
 
+    // Apply the displacement filter
+    container.style.filter = "url(#crt-displace-filter)";
+
     container.classList.add("crt-active");
     overlay.classList.add("crt-active");
 
-    // Start animated scan bar loop if not running
+    // Start animated displacement loop if not running
     if (!_crtAnimRAF) _crtAnimRAF = requestAnimationFrame(_tickCRT);
 
   } else {
@@ -504,6 +570,7 @@ export function applyCRTEffect() {
     container.style.perspective  = "none";
     container.style.transform    = "none";
     container.style.borderRadius = "0";
+    container.style.filter       = "none";
     document.querySelectorAll(".terminal-pane").forEach(pane => {
       pane.style.filter = "none";
     });

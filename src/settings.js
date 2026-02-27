@@ -358,11 +358,17 @@ function buildSettingsHTML(config) {
         <!-- Static Noise Effect -->
         <div class="setting-group">
           <h3>📺 Analog Static Noise (WebGL)</h3>
-          <label class="checkbox-label" style="margin-bottom: 8px;">
-            <input type="checkbox" id="static-enabled" ${config.effects?.staticEnabled ? "checked" : ""} />
-            Enable Static Noise Overlay
-          </label>
-          <div class="dialog-note">Film-grain style noise blended over the terminal. Uses <code>mix-blend-mode: screen</code>.</div>
+          <div style="display: flex; gap: 16px; align-items: center; margin-bottom: 8px;">
+            <label class="checkbox-label">
+              <input type="checkbox" id="static-enabled" ${config.effects?.staticEnabled ? "checked" : ""} />
+              Enable Overlay
+            </label>
+            <label class="checkbox-label">
+              <input type="checkbox" id="static-simple" ${config.effects?.staticSimple ? "checked" : ""} />
+              Simple Mono-Static
+            </label>
+          </div>
+          <div class="dialog-note">Film-grain style noise. Simple mode is a uniform high-speed pattern.</div>
         </div>
         <div id="static-options" class="setting-group" style="display: flex; flex-direction: column; gap: 8px; opacity: ${config.effects?.staticEnabled ? "1" : "0.5"}; pointer-events: ${config.effects?.staticEnabled ? "auto" : "none"}; padding-left: 8px;">
           <label style="font-size: 13px; color: #ccc;">Intensity (overlay brightness)
@@ -378,21 +384,17 @@ function buildSettingsHTML(config) {
 
         <hr style="border:0; border-top:1px solid #444; margin: 16px 0;" />
 
-        <!-- CRT Scanlines -->
         <div class="setting-group">
-          <h3>🔲 CRT Scanlines + Phosphor Glow (CSS)</h3>
+          <h3>🔲 CRT Horizontal Interference</h3>
           <label class="checkbox-label" style="margin-bottom: 8px;">
             <input type="checkbox" id="crt-enabled" ${config.effects?.crtEnabled ? "checked" : ""} />
-            Enable CRT Scanlines Effect
+            Enable Displacement Effect
           </label>
-          <div class="dialog-note">Clean scanline overlay with phosphor glow and barrel distortion. No jitter.</div>
+          <div class="dialog-note">True horizontal pixel-line displacement (wavy sine-wave shift).</div>
         </div>
         <div id="crt-options" class="setting-group" style="display: flex; flex-direction: column; gap: 8px; opacity: ${config.effects?.crtEnabled ? "1" : "0.5"}; pointer-events: ${config.effects?.crtEnabled ? "auto" : "none"}; padding-left: 8px;">
-          <label style="font-size: 13px; color: #ccc;">Scanline Opacity
-            <input type="range" id="crt-scanlines" min="0" max="100" value="${config.effects?.crtScanlines ?? 50}" style="width: 100%; margin-top: 4px;">
-          </label>
-          <label style="font-size: 13px; color: #ccc;">Phosphor Glow
-            <input type="range" id="crt-tearing" min="0" max="100" value="${config.effects?.crtTearing ?? 25}" style="width: 100%; margin-top: 4px;">
+          <label style="font-size: 13px; color: #ccc;">Interference Shift (Max Shift)
+            <input type="range" id="crt-shift" min="0" max="40" value="${config.effects?.crtShift ?? 15}" style="width: 100%; margin-top: 4px;">
           </label>
           <label style="font-size: 13px; color: #ccc;">Screen Curvature (Barrel Distortion)
             <input type="range" id="crt-curvature" min="0" max="100" value="${config.effects?.crtCurvature ?? 50}" style="width: 100%; margin-top: 4px;">
@@ -460,15 +462,15 @@ function applySettingsFromDialog(dialog) {
 
   // Static noise effect
   config.effects.staticEnabled   = dialog.querySelector("#static-enabled")?.checked   ?? false;
+  config.effects.staticSimple    = dialog.querySelector("#static-simple")?.checked    ?? false;
   config.effects.staticIntensity = parseInt(dialog.querySelector("#static-intensity")?.value) || 50;
   config.effects.staticDensity   = parseInt(dialog.querySelector("#static-density")?.value)   || 60;
   config.effects.staticAmplitude = parseInt(dialog.querySelector("#static-amplitude")?.value) || 55;
-
-  // CRT scanlines effect
+ 
+  // CRT displacement effect
   config.effects.crtEnabled   = dialog.querySelector("#crt-enabled")?.checked ?? false;
-  config.effects.crtScanlines = parseInt(dialog.querySelector("#crt-scanlines")?.value)  || 0;
-  config.effects.crtTearing   = parseInt(dialog.querySelector("#crt-tearing")?.value)    || 0;
-  config.effects.crtCurvature = parseInt(dialog.querySelector("#crt-curvature")?.value)  || 0;
+  config.effects.crtShift     = parseInt(dialog.querySelector("#crt-shift")?.value)     || 15;
+  config.effects.crtCurvature = parseInt(dialog.querySelector("#crt-curvature")?.value) || 0;
 
   applyTheme();
   applyStaticEffect();
