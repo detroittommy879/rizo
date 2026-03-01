@@ -1,4 +1,6 @@
-# AGENTS.md - XTerm Rust
+# AGENTS.md - Rizo Terminal (XTerm Rust)
+
+> **For AI agents:** When working in this codebase, append any discoveries, gotchas, naming conventions, or workflow shortcuts you learn to this file. Future agents will read it before starting work — anything you write helps them skip repeated research and avoid known pitfalls. The implementation roadmap lives in [PLAN.md](PLAN.md) with phase details in [phase-1.md](phase-1.md), [phase-2.md](phase-2.md), [phase-3.md](phase-3.md).
 
 GPU-accelerated terminal emulator built with Tauri v2 (Rust) and xterm.js (WebGL2).
 
@@ -6,22 +8,27 @@ GPU-accelerated terminal emulator built with Tauri v2 (Rust) and xterm.js (WebGL
 
 - **Node.js** >= 18 (tested with v25)
 - **Rust** >= 1.70 (tested with 1.91)
-- **npm** >= 9
+- **pnpm** >= 9 (use pnpm, not npm — see note below)
+
+> **Package manager note:** This project uses `pnpm`. After cloning, run `pnpm install` then `pnpm approve-builds` (required once to allow esbuild's postinstall script). Do NOT use `npm install` as it will create a `package-lock.json` and may leave `node_modules` incomplete.
+>
+> **`npm run tauri build -- --debug` does NOT work** — pnpm passes the `--` literally to cargo, causing an error. Use `pnpm tauri build --debug` instead.
 
 ## Quick Start
 
 ```bash
 # Install frontend dependencies
-npm install
+pnpm install
+pnpm approve-builds   # required once after first install
 
 # Development mode (hot reload frontend + debug Rust backend)
-npm run tauri dev
+pnpm run tauri dev
 
 # Production build
-npm run tauri build
+pnpm tauri build
 
 # Debug build (faster compile, unoptimized)
-npm run tauri build -- --debug
+pnpm tauri build --debug
 ```
 
 ## Build Output
@@ -32,24 +39,25 @@ npm run tauri build -- --debug
 
 ## Build Commands Reference
 
-| Command                          | What it does                                        |
-| -------------------------------- | --------------------------------------------------- |
-| `npm install`                    | Install JS dependencies (xterm.js, Tauri API, Vite) |
-| `npm run dev`                    | Start Vite dev server only (port 1420)              |
-| `npm run build`                  | Build frontend to `dist/`                           |
-| `npm run tauri dev`              | Full dev mode: Vite + Rust compile + launch app     |
-| `npm run tauri build`            | Full release build with bundled installer           |
-| `npm run tauri build -- --debug` | Debug build (faster, larger binary)                 |
-| `cargo check` (in `src-tauri/`)  | Check Rust compiles without building                |
-| `cargo build` (in `src-tauri/`)  | Build Rust backend only                             |
+| Command                         | What it does                                        |
+| ------------------------------- | --------------------------------------------------- |
+| `pnpm install`                  | Install JS dependencies (xterm.js, Tauri API, Vite) |
+| `pnpm approve-builds`           | Allow esbuild postinstall (run once after install)  |
+| `pnpm run dev`                  | Start Vite dev server only (port 1420)              |
+| `pnpm run build`                | Build frontend to `dist/`                           |
+| `pnpm run tauri dev`            | Full dev mode: Vite + Rust compile + launch app     |
+| `pnpm tauri build`              | Full release build with bundled installer           |
+| `pnpm tauri build --debug`      | Debug build (faster, larger binary)                 |
+| `cargo check` (in `src-tauri/`) | Check Rust compiles without building                |
+| `cargo build` (in `src-tauri/`) | Build Rust backend only                             |
 
 ## Project Structure
 
 ```
 xterm-rust/
 ├── AGENTS.md                          # This file
-├── package.json                       # npm config, JS dependencies, scripts
-├── package-lock.json                  # Locked dependency versions
+├── package.json                       # pnpm config, JS dependencies, scripts
+├── pnpm-lock.yaml                     # Locked dependency versions (pnpm)
 ├── vite.config.js                     # Vite dev server config (port 1420)
 ├── index.html                         # HTML entry point (loads src/main.js)
 ├── .gitignore
@@ -145,27 +153,30 @@ All Rust logic is in a single file with three sections:
 
 ### Frontend (`src/`)
 
-**`main.js`** - Application core (~530 lines)
+**`main.js`** - Application core (~1,150 lines)
 
-- `DEFAULT_CONFIG` - complete default config object (theme, presets, window)
+- `DEFAULT_CONFIG` - complete default config object (theme, effects, features, presets, window)
 - Config functions: `loadConfig()`, `saveConfig()`, `getConfig()`, `applyTheme()`
 - Tab management: `createTab()`, `closeTab(id)`, `switchTab(id)`, `toggleSplit()`
   - Each tab has its own `Terminal` instance, `FitAddon`, `WebglAddon`, DOM container
   - Listens to per-PTY events (`pty-output-{id}`, `pty-exit-{id}`)
   - `ResizeObserver` per tab for auto-fitting
 - Preset bar: `rebuildPresetBar()`, right-click to delete, `+` button to add
+- Effects: `initStaticEffect()`, `initCRTEffect()`, `applyGradient()`
 - Menu event handler dispatches to appropriate tab/action
 - `init()` loads config, builds UI, creates first tab
 
-**`settings.js`** - Settings dialog (~230 lines)
+**`settings.js`** - Settings dialog (~500 lines)
 
 - `openSettings()` - builds and shows the modal dialog
-- Four tabs: Font, Colors, Background, Window
+- Six tabs: Font, Colors, Background, Window, Features, Effects
 - Font: Google Fonts dropdown (20 monospace fonts), local font file upload via `FontFace` API
 - Colors: `<input type="color">` pickers for fg, cursor, selection, 16 ANSI colors
 - Live color preview showing sample terminal output
-- Background: solid color or gradient with start/end/angle
+- Background: solid color or gradient with up to 4 stops + angle + animation toggle
 - Window: default cols/rows for new tabs
+- Features: GPU acceleration toggle, autocomplete toggle
+- Effects: WebGL noise (static), CRT distortion sliders
 - Apply (live preview) vs Save & Close (persists to disk)
 
 **`styles.css`** - All styling (~600 lines)
